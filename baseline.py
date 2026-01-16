@@ -54,8 +54,8 @@ def run_baseline(image_path: str, prompt: str = "Describe this image in detail."
     print("-" * 50)
 
     print("\nMemory:")
-    print(f"  Active: {mx.metal.get_active_memory() / 1e9:.2f} GB")
-    print(f"  Peak:   {mx.metal.get_peak_memory() / 1e9:.2f} GB")
+    print(f"  Active: {mx.get_active_memory() / 1e9:.2f} GB")
+    print(f"  Peak:   {mx.get_peak_memory() / 1e9:.2f} GB")
 
     return output
 
