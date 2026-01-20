@@ -1,0 +1,3 @@
+[submodule "fastvlm"]
+	path = fastvlm
+	url = https://github.com/harini-tt/ml-fastvlm.git
