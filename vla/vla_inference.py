@@ -1,4 +1,4 @@
-"""Frame-by-frame inference harness for VLA cache experiments."""
+"""Run inference on image sequences with optional VLA caching."""
 
 import time
 from pathlib import Path
@@ -16,7 +16,7 @@ from .vla_model import create_vla_cache_model
 
 
 def time_it(name):
-    """Simple timing helper for console output."""
+    """Quick and dirty timing context manager."""
     class Timer:
         def __enter__(self):
             self.start = time.perf_counter()
@@ -37,7 +37,7 @@ def run_vla_cache_inference(
     enable_cache: bool = True,
     enable_visualization: bool = False,
 ):
-    """Run inference across frames with optional VLA cache enabled."""
+    """Process a sequence of frames, caching vision tokens between them."""
     print(f"Model: {model_path}")
     print(f"Frames: {len(image_paths)}")
     print(f"VLA-Cache: {'ENABLED ✓' if enable_cache else 'DISABLED'}")
@@ -239,7 +239,7 @@ def run_vla_cache_inference(
 
 
 def run_comparison(image_paths: List[str], prompt: str):
-    """Compare baseline vs cached runs for a single sequence."""
+    """Run with and without cache, print speedup."""
     print("\n" + "="*80)
     print("BASELINE (NO CACHE)")
     print("="*80)

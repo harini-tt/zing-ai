@@ -1,4 +1,4 @@
-"""VLA cache helpers for patch similarity, attention filtering, and cache state."""
+"""Patch similarity, attention filtering, and cache state for VLA."""
 
 import cv2
 import numpy as np
@@ -11,7 +11,7 @@ from typing import List, Tuple, Optional, Dict, Any
 # === Patch similarity ===
 
 def patchify(image: Image.Image, patch_size: int = 14) -> np.ndarray:
-    """Split an image into non-overlapping square patches."""
+    """Chop image into patch_size x patch_size blocks."""
     image_arr = np.array(image)
     h, w = image_arr.shape[:2]
 
@@ -33,7 +33,7 @@ def patchify(image: Image.Image, patch_size: int = 14) -> np.ndarray:
 
 
 def calculate_patch_similarity(patches1: np.ndarray, patches2: np.ndarray) -> np.ndarray:
-    """Return cosine similarity for corresponding patches."""
+    """Cosine similarity between matching patches."""
     flat1 = patches1.reshape(len(patches1), -1).astype(np.float32)
     flat2 = patches2.reshape(len(patches2), -1).astype(np.float32)
 
@@ -53,7 +53,7 @@ def find_static_patches(
     top_k: int = 150,
     sim_threshold: float = 0.996,
 ) -> List[int]:
-    """Find patch indices that remain visually stable between frames."""
+    """Which patches didn't change much between frames."""
     patches_curr = patchify(img_curr, patch_size)
     patches_prev = patchify(img_prev, patch_size)
 
@@ -83,7 +83,7 @@ def get_layer_mask_schedule(
     apply_weighted_growth: bool = True,
     growth_factor: float = 0.55,
 ) -> mx.array:
-    """Compute per-layer reuse ratios from attention entropy."""
+    """Figure out how much each layer can reuse based on attention entropy."""
     entropies = []
 
     for attn in attention_maps[:-1]:
@@ -126,7 +126,7 @@ def token_attention_merge(
     t_token_start: int = 257,
     t_token_count: int = 35,
 ) -> mx.array:
-    """Aggregate attention from text tokens to vision tokens."""
+    """How much are text tokens paying attention to vision tokens."""
     attn_map = attention_maps[layer_id].astype(mx.float32)
 
     if attn_map.ndim == 4:
@@ -146,7 +146,7 @@ def token_attention_merge(
 
 
 def get_top_attention_patches(attn_scores: mx.array, top_k: int = 120) -> List[int]:
-    """Pick the highest-attended vision patches."""
+    """Grab the patches the model cares about most."""
     attn_np = np.array(attn_scores)
 
     grid_size = int(np.sqrt(len(attn_np)))
@@ -173,7 +173,7 @@ def task_relevant_selection(
     layer_id: int = 15,
     v_token_start: int = 1,
 ) -> Tuple[np.ndarray, List[int]]:
-    """Keep static patches that are low-attention and therefore cacheable."""
+    """Static patches that aren't being looked at = safe to cache."""
     attn_scores = token_attention_merge(
         attention_maps,
         attention_positions,
@@ -210,7 +210,7 @@ def draw_patches_overlay(
     patch_size: int = 14,
     alpha: float = 0.4,
 ) -> Image.Image:
-    """Overlay colored patch groups for debugging and demos."""
+    """Draw colored boxes over patches for debugging."""
     image = image.convert("RGBA")
     overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(overlay)
@@ -233,7 +233,7 @@ def draw_patches_overlay(
 
 # === Cache manager ===
 class VLACache:
-    """Track frame-to-frame state and cacheable token indices."""
+    """Tracks what can be reused between frames."""
 
     def __init__(
         self,
@@ -243,7 +243,6 @@ class VLACache:
         max_attention_patches: int = 120,
         enable_visualization: bool = False,
     ):
-        """Initialize cache settings and counters."""
         self.patch_size = patch_size
         self.sim_threshold = sim_threshold
         self.max_static_patches = max_static_patches
@@ -261,7 +260,7 @@ class VLACache:
         self.total_tokens_computed = 0
 
     def should_cache(self) -> bool:
-        """Return True if a previous frame is available."""
+        """Do we have a previous frame to compare against?"""
         return self.prev_frame is not None
 
     def get_cacheable_tokens(
@@ -271,7 +270,7 @@ class VLACache:
         curr_attention_positions: mx.array,
         layer_id: int = 15,
     ) -> Tuple[Optional[List[int]], Optional[np.ndarray]]:
-        """Compute cacheable token indices and optional visualization."""
+        """Figure out which tokens we can skip recomputing."""
         if not self.should_cache():
             return None, None
 
@@ -307,7 +306,7 @@ class VLACache:
         attention_maps: List[mx.array],
         attention_positions: mx.array,
     ):
-        """Store the current frame state for the next step."""
+        """Save this frame's state for next time."""
         self.prev_frame = frame
         self.prev_vision_hidden = vision_hidden
         self.prev_attention_maps = attention_maps
@@ -315,7 +314,7 @@ class VLACache:
         self.frame_count += 1
 
     def reset(self):
-        """Clear all cached state and counters."""
+        """Wipe everything."""
         self.prev_frame = None
         self.prev_vision_hidden = None
         self.prev_attention_maps = None
@@ -323,7 +322,7 @@ class VLACache:
         self.frame_count = 0
 
     def get_stats(self) -> Dict[str, Any]:
-        """Return cumulative cache statistics."""
+        """How's the cache doing?"""
         total_tokens = self.total_tokens_cached + self.total_tokens_computed
         cache_rate = self.total_tokens_cached / total_tokens if total_tokens > 0 else 0
 

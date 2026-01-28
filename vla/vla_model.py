@@ -1,4 +1,4 @@
-"""MLX VLM wrappers that add VLA cache behavior."""
+"""Wrappers around MLX VLM to bolt on caching."""
 
 from typing import Optional, List, Tuple, Dict, Any
 
@@ -7,7 +7,7 @@ from PIL import Image
 
 
 class PatchWiseVisionEncoder:
-    """Vision encoder adapter that can reuse cached patch embeddings."""
+    """Vision encoder that can swap in cached patches."""
 
     def __init__(self, vision_tower):
         self.vision_tower = vision_tower
@@ -21,7 +21,7 @@ class PatchWiseVisionEncoder:
         cacheable_patch_indices: Optional[List[int]] = None,
         prev_embeddings: Optional[mx.array] = None,
     ) -> mx.array:
-        """Run the vision tower and swap in cached patch embeddings."""
+        """Run vision tower, optionally reusing old embeddings for some patches."""
         if cacheable_patch_indices is None or prev_embeddings is None:
             return self.vision_tower(pixel_values, grid_thw)
 
@@ -38,7 +38,7 @@ class PatchWiseVisionEncoder:
 
 
 class AttentionCapturingLanguageModel:
-    """Language model adapter that records attention maps."""
+    """LM wrapper that saves attention weights as a side effect."""
 
     def __init__(self, language_model):
         self.language_model = language_model
@@ -52,7 +52,7 @@ class AttentionCapturingLanguageModel:
         mask: Optional[mx.array] = None,
         cache: Optional[Any] = None,
     ):
-        """Forward pass that also stores attention data when available."""
+        """Forward pass, stashing attention maps if the model exposes them."""
         output = self.language_model(input_ids, inputs_embeds, mask=mask, cache=cache)
 
         self.captured_attentions = []
@@ -68,7 +68,7 @@ class AttentionCapturingLanguageModel:
         return output
 
     def get_attentions(self) -> Tuple[List[mx.array], mx.array]:
-        """Return attention maps and token positions, falling back to dummy data."""
+        """Get captured attentions, or dummy ones if nothing was recorded."""
         if len(self.captured_attentions) == 0:
             num_layers = 32
             num_tokens = 256 + 35
@@ -84,7 +84,7 @@ class AttentionCapturingLanguageModel:
 
 
 class SelectiveKVCache:
-    """Cache wrapper that can reuse KV entries for specific tokens."""
+    """KV cache that can skip updating certain positions."""
 
     def __init__(self, base_cache):
         self.base_cache = base_cache
@@ -93,11 +93,11 @@ class SelectiveKVCache:
         self.reusable_indices = None
 
     def set_reusable_indices(self, indices: List[int]):
-        """Mark token indices that can reuse cached KV values."""
+        """These token positions can reuse their old KV values."""
         self.reusable_indices = indices
 
     def update(self, keys: mx.array, values: mx.array, layer_idx: int) -> Tuple[mx.array, mx.array]:
-        """Update KV state, preserving entries when reuse is enabled."""
+        """Update KV, keeping old values for reusable indices."""
         if self.reusable_indices is None or len(self.reusable_indices) == 0:
             self.base_cache.update(keys, values, layer_idx)
             return keys, values
@@ -107,12 +107,12 @@ class SelectiveKVCache:
         return keys, values
 
     def __getattr__(self, name):
-        """Defer to the underlying cache implementation."""
+        """Pass through to the base cache."""
         return getattr(self.base_cache, name)
 
 
 class VLACacheModel:
-    """VLA-enabled wrapper that bundles vision caching and attention capture."""
+    """Main wrapper: vision caching + attention capture in one place."""
 
     def __init__(self, base_model, processor, config):
         self.base_model = base_model
@@ -135,7 +135,7 @@ class VLACacheModel:
         grid_thw: mx.array,
         cacheable_indices: Optional[List[int]] = None,
     ) -> Tuple[mx.array, int, int]:
-        """Encode vision features and report cached vs computed counts."""
+        """Run vision encoder, returns (hidden, computed_count, cached_count)."""
         vision_hidden = self.vision_encoder(
             pixel_values,
             grid_thw,
@@ -161,7 +161,7 @@ class VLACacheModel:
         cacheable_token_indices: Optional[List[int]] = None,
         layer_schedule: Optional[mx.array] = None,
     ):
-        """Forward pass that optionally wraps the cache for selective reuse."""
+        """LM forward with optional selective KV caching."""
         if cacheable_token_indices and cache is not None:
             if not isinstance(cache, SelectiveKVCache):
                 self.selective_cache = SelectiveKVCache(cache)
@@ -173,7 +173,7 @@ class VLACacheModel:
         return output
 
     def get_attentions(self) -> Tuple[List[mx.array], mx.array]:
-        """Expose the most recently captured attention maps."""
+        """Last run's attention maps."""
         return self.language_model.get_attentions()
 
     def update_cache_state(
@@ -181,12 +181,12 @@ class VLACacheModel:
         vision_embeddings: mx.array,
         frame: Optional[Image.Image] = None,
     ):
-        """Store the vision embeddings for reuse on the next frame."""
+        """Stash vision embeddings for next frame."""
         self.prev_vision_embeddings = vision_embeddings
         self.prev_frame = frame
 
     def get_cache_stats(self) -> Dict[str, Any]:
-        """Summarize cache usage over the run."""
+        """Stats on how much we cached."""
         cache_rate = 0.0
         if self.total_vision_tokens > 0:
             cache_rate = self.cached_vision_tokens / self.total_vision_tokens
@@ -199,7 +199,7 @@ class VLACacheModel:
         }
 
     def reset_cache(self):
-        """Drop cached state and reset counters."""
+        """Clear everything."""
         self.prev_vision_embeddings = None
         self.prev_frame = None
         self.selective_cache = None
@@ -211,5 +211,5 @@ class VLACacheModel:
 
 
 def create_vla_cache_model(base_model, processor, config):
-    """Build a VLA cache wrapper around a base MLX VLM model."""
+    """Wrap a model with VLA caching."""
     return VLACacheModel(base_model, processor, config)
