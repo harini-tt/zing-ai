@@ -1,3 +1,6 @@
 [submodule "fastvlm"]
 	path = fastvlm
 	url = https://github.com/harini-tt/ml-fastvlm.git
+[submodule "vla-cache"]
+	path = vla-cache
+	url = https://github.com/siyuhsu/vla-cache.git
