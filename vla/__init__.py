@@ -11,6 +11,11 @@ from .token_merging import (
     HierarchicalPooler,
 )
 from .efficient_vla import EfficientVLAPipeline, EfficientVLAConfig
+from .speculative import (
+    SpeculativePruningConfig,
+    SpeculativeTokenSignals,
+    SpeculativePruner,
+)
 
 __all__ = [
     # VLA Cache (original)
@@ -33,4 +38,8 @@ __all__ = [
     # Combined pipeline
     "EfficientVLAPipeline",
     "EfficientVLAConfig",
+    # Speculative pruning
+    "SpeculativePruningConfig",
+    "SpeculativeTokenSignals",
+    "SpeculativePruner",
 ]
