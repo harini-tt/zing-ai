@@ -12,6 +12,8 @@ test_frames/
 vla_cache_viz_*.png
 cache_viz_*.png
 vla_cache_benchmark_results.json
+papers/
+research-assistant/paper_embeddings.json
 
 # Virtual environments
 venv/
