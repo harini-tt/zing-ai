@@ -1,4 +1,4 @@
-"""Efficient VLA: Combines temporal frame skipping + hierarchical token merging.
+"""Efficient VLA: Combines temporal frame skipping, token merging, and optional pruning.
 
 Two-stage optimization:
 1. Temporal skipping - decide skip/cache/keyframe per frame (20x speedup)
@@ -32,6 +32,13 @@ except ImportError:
         TokenMergingConfig,
     )
 
+try:
+    from .speculative import SpeculativePruner, SpeculativePruningConfig, SpeculativeTokenSignals
+except ImportError:
+    SpeculativePruner = None
+    SpeculativePruningConfig = None
+    SpeculativeTokenSignals = None
+
 
 @dataclass
 class EfficientVLAConfig:
@@ -52,6 +59,8 @@ class EfficientVLAConfig:
     enable_temporal_skip: bool = True
     enable_token_merging: bool = True
     enable_saliency: bool = True
+    enable_speculative_pruning: bool = False
+    speculative_keep_ratio: float = 0.5
 
 
 @dataclass
@@ -70,6 +79,7 @@ class PipelineStats:
     spatial_merged: int = 0
     temporal_merged: int = 0
     saliency_pruned: int = 0
+    speculative_pruned: int = 0
 
     # Timing
     total_time_ms: float = 0.0
@@ -92,6 +102,7 @@ class PipelineStats:
             "output_tokens": self.total_output_tokens,
             "token_compression": self.total_input_tokens / max(1, self.total_output_tokens),
             "token_reduction": 1.0 - (self.total_output_tokens / max(1, self.total_input_tokens)),
+            "speculative_pruned": self.speculative_pruned,
 
             # Timing
             "total_time_ms": self.total_time_ms,
@@ -119,7 +130,7 @@ def quick_histogram_similarity(frame1: np.ndarray, frame2: np.ndarray) -> float:
 
 
 class EfficientVLAPipeline:
-    """Combined temporal skipping + token merging pipeline."""
+    """Combined temporal skipping + token merging + optional pruning pipeline."""
 
     def __init__(self, config: Optional[EfficientVLAConfig] = None):
         self.config = config or EfficientVLAConfig()
@@ -132,6 +143,12 @@ class EfficientVLAPipeline:
             temporal_segment_size=self.config.temporal_segment_size,
             use_saliency=self.config.enable_saliency,
         ))
+
+        self.speculative_pruner = None
+        if self.config.enable_speculative_pruning and SpeculativePruner is not None:
+            self.speculative_pruner = SpeculativePruner(
+                SpeculativePruningConfig(keep_ratio=self.config.speculative_keep_ratio)
+            )
 
         # State
         self.last_frame: Optional[np.ndarray] = None
@@ -168,8 +185,26 @@ class EfficientVLAPipeline:
         self,
         tokens: np.ndarray,
         attention_weights: Optional[np.ndarray] = None,
+        draft_logits: Optional[np.ndarray] = None,
+        target_logits: Optional[np.ndarray] = None,
+        speculative_signals: Optional["SpeculativeTokenSignals"] = None,
     ) -> np.ndarray:
-        """Process tokens through merging pipeline."""
+        """Process tokens through optional pruning and merging."""
+        if (
+            self.speculative_pruner is not None
+            and draft_logits is not None
+            and target_logits is not None
+        ):
+            keep_mask = self.speculative_pruner.keep_mask(
+                draft_logits,
+                target_logits,
+                speculative_signals,
+            )
+            if keep_mask.shape[0] == tokens.shape[0]:
+                kept_tokens = tokens[keep_mask]
+                self.stats.speculative_pruned += tokens.shape[0] - kept_tokens.shape[0]
+                tokens = kept_tokens
+
         if not self.config.enable_token_merging:
             return tokens
 
@@ -201,6 +236,9 @@ class EfficientVLAPipeline:
         frame: np.ndarray,
         vision_tokens: Optional[np.ndarray] = None,
         attention_weights: Optional[np.ndarray] = None,
+        draft_logits: Optional[np.ndarray] = None,
+        target_logits: Optional[np.ndarray] = None,
+        speculative_signals: Optional["SpeculativeTokenSignals"] = None,
     ) -> Tuple[str, Optional[np.ndarray], Optional[str]]:
         """Process a single frame through the pipeline.
 
@@ -208,6 +246,9 @@ class EfficientVLAPipeline:
             frame: RGB image as numpy array
             vision_tokens: Pre-computed vision tokens (if available)
             attention_weights: Attention weights for saliency
+            draft_logits: Draft model logits aligned to vision tokens
+            target_logits: Target model logits aligned to vision tokens
+            speculative_signals: Optional extra pruning signals
 
         Returns:
             (action, merged_tokens, output)
@@ -239,7 +280,13 @@ class EfficientVLAPipeline:
         merged_tokens = None
         if vision_tokens is not None:
             self.stats.total_input_tokens += vision_tokens.shape[0]
-            merged_tokens = self.process_tokens(vision_tokens, attention_weights)
+            merged_tokens = self.process_tokens(
+                vision_tokens,
+                attention_weights,
+                draft_logits=draft_logits,
+                target_logits=target_logits,
+                speculative_signals=speculative_signals,
+            )
             self.stats.total_output_tokens += merged_tokens.shape[0]
 
         # Update state
