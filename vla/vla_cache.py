@@ -8,6 +8,94 @@ from skimage.util import view_as_blocks
 from typing import List, Tuple, Optional, Dict, Any
 
 
+# === Fast frame similarity (for temporal skipping) ===
+
+def quick_frame_similarity(
+    frame1: np.ndarray,
+    frame2: np.ndarray,
+    method: str = "histogram",
+) -> float:
+    """Fast similarity check (<5ms). NOT full patchify - that's too slow for skip decisions.
+
+    Args:
+        frame1: Current frame as RGB numpy array
+        frame2: Previous frame as RGB numpy array
+        method: One of "histogram", "patch", "phash"
+
+    Returns:
+        Similarity score in [0, 1], where 1 = identical
+    """
+    if frame1 is None or frame2 is None:
+        return 0.0
+
+    if method == "histogram":
+        return _histogram_similarity(frame1, frame2)
+    elif method == "patch":
+        return _sparse_patch_similarity(frame1, frame2)
+    elif method == "phash":
+        return _perceptual_hash_similarity(frame1, frame2)
+    else:
+        return _histogram_similarity(frame1, frame2)
+
+
+def _histogram_similarity(frame1: np.ndarray, frame2: np.ndarray) -> float:
+    """Compare histograms - very fast (~1ms)."""
+    small1 = cv2.resize(frame1, (64, 64))
+    small2 = cv2.resize(frame2, (64, 64))
+
+    hist1 = cv2.calcHist([small1], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+    hist2 = cv2.calcHist([small2], [0, 1, 2], None, [8, 8, 8], [0, 256, 0, 256, 0, 256])
+
+    hist1 = cv2.normalize(hist1, hist1).flatten()
+    hist2 = cv2.normalize(hist2, hist2).flatten()
+
+    return float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_CORREL))
+
+
+def _sparse_patch_similarity(
+    frame1: np.ndarray,
+    frame2: np.ndarray,
+    num_patches: int = 16,
+    patch_size: int = 32,
+) -> float:
+    """Sample sparse patches and compare (~2ms)."""
+    h, w = frame1.shape[:2]
+
+    np.random.seed(42)
+    patch_y = np.random.randint(0, h - patch_size, num_patches)
+    patch_x = np.random.randint(0, w - patch_size, num_patches)
+
+    similarities = []
+    for y, x in zip(patch_y, patch_x):
+        p1 = frame1[y:y+patch_size, x:x+patch_size].astype(np.float32).flatten()
+        p2 = frame2[y:y+patch_size, x:x+patch_size].astype(np.float32).flatten()
+
+        norm1 = np.linalg.norm(p1)
+        norm2 = np.linalg.norm(p2)
+        if norm1 > 0 and norm2 > 0:
+            sim = np.dot(p1, p2) / (norm1 * norm2)
+            similarities.append(sim)
+
+    return float(np.mean(similarities)) if similarities else 0.0
+
+
+def _perceptual_hash_similarity(frame1: np.ndarray, frame2: np.ndarray) -> float:
+    """Perceptual hash comparison (~1ms)."""
+    def dhash(img: np.ndarray, hash_size: int = 8) -> np.ndarray:
+        gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+        resized = cv2.resize(gray, (hash_size + 1, hash_size))
+        diff = resized[:, 1:] > resized[:, :-1]
+        return diff.flatten()
+
+    hash1 = dhash(frame1)
+    hash2 = dhash(frame2)
+
+    hamming = np.sum(hash1 != hash2)
+    max_dist = len(hash1)
+
+    return 1.0 - (hamming / max_dist)
+
+
 # === Patch similarity ===
 
 def patchify(image: Image.Image, patch_size: int = 14) -> np.ndarray:
