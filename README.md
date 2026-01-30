@@ -11,7 +11,7 @@ A vision-language research assistant that runs entirely on-device using Apple Si
 
 ## Demo
 
-Coming soon!
+<img src="demo.png" alt="Zing AI Demo" width="25%">
 
 ## Setup
 
